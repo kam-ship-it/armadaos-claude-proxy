@@ -1,12 +1,12 @@
 {
   "name": "armadaos-claude-proxy",
-  "version": "1.0.0",
-  "description": "Connect your Claude Max subscription to ArmadaOS. Proxies Claude API requests through your local Claude Code OAuth credentials.",
+  "version": "2.0.0",
+  "description": "One-command connection of your Claude Max/Pro subscription to ArmadaOS. Auto-detects credentials, creates tunnel automatically.",
   "main": "index.js",
   "bin": {
     "armadaos-claude-proxy": "./index.js"
   },
-  "keywords": ["armadaos", "claude", "proxy", "byoc", "anthropic"],
+  "keywords": ["armadaos", "claude", "proxy", "byoc", "anthropic", "tunnel"],
   "author": "ArmadaOS",
   "license": "MIT",
   "dependencies": {},
