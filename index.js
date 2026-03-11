@@ -199,10 +199,12 @@ function runClaudeCli(prompt, model, stream) {
       prompt,                       // The prompt
     ];
 
+    const isWin = process.platform === "win32";
     const proc = spawn(CLAUDE_CLI_PATH, args, {
       cwd: os.homedir(),
       env: { ...process.env },
       stdio: ["pipe", "pipe", "pipe"],
+      shell: isWin,  // Required on Windows to resolve .cmd shims
     });
 
     // Close stdin — prompt is passed as argument
