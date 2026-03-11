@@ -53,22 +53,90 @@ function logStep(n, msg) { console.log(`  ${CYAN}[${n}]${RESET} ${msg}`); }
 // ─── Claude CLI Detection ─────────────────────────────────────────────────
 
 function findClaudeCli() {
+  const isWin = process.platform === "win32";
+
+  // Method 1: Check PATH using where/which
   try {
-    const which = process.platform === "win32" ? "where" : "which";
-    const result = execSync(`${which} claude 2>/dev/null`, {
+    const cmd = isWin ? "where claude 2>nul" : "which claude 2>/dev/null";
+    const result = execSync(cmd, {
       encoding: "utf-8",
       timeout: 5000,
     }).trim().split("\n")[0];
-    return result || null;
+    if (result) return result;
   } catch {
-    return null;
+    // Not in PATH
   }
+
+  // Method 2: Check common npm global install locations (Windows)
+  if (isWin) {
+    const fs = require("fs");
+    const path = require("path");
+    const candidates = [];
+
+    // npm global prefix
+    try {
+      const npmPrefix = execSync("npm prefix -g 2>nul", {
+        encoding: "utf-8",
+        timeout: 5000,
+      }).trim();
+      if (npmPrefix) {
+        candidates.push(path.join(npmPrefix, "claude.cmd"));
+        candidates.push(path.join(npmPrefix, "claude"));
+        candidates.push(path.join(npmPrefix, "node_modules", ".bin", "claude.cmd"));
+        candidates.push(path.join(npmPrefix, "node_modules", ".bin", "claude"));
+      }
+    } catch {}
+
+    // Common Windows paths
+    const appData = process.env.APPDATA || "";
+    const userProfile = process.env.USERPROFILE || process.env.HOME || "";
+    if (appData) {
+      candidates.push(path.join(appData, "npm", "claude.cmd"));
+      candidates.push(path.join(appData, "npm", "claude"));
+    }
+    if (userProfile) {
+      candidates.push(path.join(userProfile, "AppData", "Roaming", "npm", "claude.cmd"));
+      candidates.push(path.join(userProfile, ".npm-global", "bin", "claude.cmd"));
+      candidates.push(path.join(userProfile, ".npm-global", "bin", "claude"));
+    }
+    // Also check Program Files for nvm-based installs
+    candidates.push("C:\\Program Files\\nodejs\\claude.cmd");
+
+    for (const candidate of candidates) {
+      try {
+        if (fs.existsSync(candidate)) {
+          log(`${DIM}Found claude at: ${candidate}${RESET}`);
+          return candidate;
+        }
+      } catch {}
+    }
+  }
+
+  // Method 3: Check common Unix paths
+  if (!isWin) {
+    const fs = require("fs");
+    const unixPaths = [
+      "/usr/local/bin/claude",
+      "/usr/bin/claude",
+      `${process.env.HOME}/.npm-global/bin/claude`,
+      `${process.env.HOME}/.nvm/versions/node/*/bin/claude`,
+    ];
+    for (const p of unixPaths) {
+      try {
+        if (fs.existsSync(p)) return p;
+      } catch {}
+    }
+  }
+
+  return null;
 }
 
 function checkClaudeAuth() {
   // Quick check: run `claude --version` to see if CLI works
+  const isWin = process.platform === "win32";
   try {
-    const version = execSync("claude --version 2>&1", {
+    const cmd = isWin ? "claude --version 2>nul" : "claude --version 2>&1";
+    const version = execSync(cmd, {
       encoding: "utf-8",
       timeout: 10000,
     }).trim();
@@ -115,6 +183,9 @@ function resolveModelId(requestedModel) {
  * Run a prompt through Claude Code CLI and return the response.
  * Uses --print mode with stream-json output for reliable parsing.
  */
+// Store the resolved claude path globally so runClaudeCli can use it
+let CLAUDE_CLI_PATH = "claude";
+
 function runClaudeCli(prompt, model, stream) {
   return new Promise((resolve, reject) => {
     const cliModel = resolveCliModel(model);
@@ -128,7 +199,7 @@ function runClaudeCli(prompt, model, stream) {
       prompt,                       // The prompt
     ];
 
-    const proc = spawn("claude", args, {
+    const proc = spawn(CLAUDE_CLI_PATH, args, {
       cwd: os.homedir(),
       env: { ...process.env },
       stdio: ["pipe", "pipe", "pipe"],
@@ -520,18 +591,23 @@ async function main() {
     console.log("");
     logErr(`${BOLD}Claude Code CLI not found.${RESET}`);
     console.log("");
-    log(`${BOLD}Install it:${RESET}`);
+    log(`${BOLD}Important:${RESET} Run this proxy from a ${BOLD}regular PowerShell/Terminal${RESET} window,`);
+    log(`${BOLD}not${RESET} from inside Claude Code's built-in terminal.`);
+    console.log("");
+    log(`${BOLD}If Claude Code CLI is not installed:${RESET}`);
     log(`  ${GREEN}npm install -g @anthropic-ai/claude-code${RESET}`);
     console.log("");
     log(`${BOLD}Then log in:${RESET}`);
     log(`  ${GREEN}claude login${RESET}`);
     console.log("");
     log(`This will open your browser to authenticate with your Claude Max/Pro account.`);
-    log(`Once logged in, run this proxy again.`);
+    log(`Once logged in, run this proxy again from a regular terminal.`);
     console.log("");
     process.exit(1);
   }
 
+  // Store the resolved path globally so runClaudeCli uses it
+  CLAUDE_CLI_PATH = claudePath;
   logOk(`Found Claude CLI at: ${BOLD}${claudePath}${RESET}`);
 
   // Step 1b: Check authentication
