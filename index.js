@@ -503,29 +503,100 @@ async function handleRequest(req, res) {
 // ─── Tunnel ───────────────────────────────────────────────────────────────
 
 async function startTunnel(port) {
+  const isWin = process.platform === "win32";
+  const nullDev = isWin ? "2>nul" : "2>/dev/null";
+  const fs = require("fs");
+  const path = require("path");
+
   try {
     let cloudflaredBin;
+
+    // Method 1: Check PATH
     try {
-      const which = process.platform === "win32" ? "where" : "which";
-      cloudflaredBin = execSync(`${which} cloudflared 2>/dev/null`, {
+      const which = isWin ? "where" : "which";
+      cloudflaredBin = execSync(`${which} cloudflared ${nullDev}`, {
         encoding: "utf-8",
         timeout: 5000,
       }).trim().split("\n")[0];
     } catch {
+      // Not in PATH
+    }
+
+    // Method 2: Check npm global prefix (Windows)
+    if (!cloudflaredBin && isWin) {
+      try {
+        const npmPrefix = execSync("npm prefix -g 2>nul", {
+          encoding: "utf-8",
+          timeout: 5000,
+        }).trim();
+        const candidates = [
+          path.join(npmPrefix, "cloudflared.cmd"),
+          path.join(npmPrefix, "cloudflared"),
+          path.join(npmPrefix, "node_modules", "cloudflared", "bin", "cloudflared.exe"),
+        ];
+        // Also check npx-managed location
+        const appData = process.env.APPDATA || "";
+        if (appData) {
+          candidates.push(path.join(appData, "npm", "cloudflared.cmd"));
+          candidates.push(path.join(appData, "npm", "cloudflared"));
+        }
+        for (const c of candidates) {
+          if (fs.existsSync(c)) {
+            cloudflaredBin = c;
+            log(`${DIM}Found cloudflared at: ${c}${RESET}`);
+            break;
+          }
+        }
+      } catch {}
+    }
+
+    // Method 3: Try to install via npm if not found
+    if (!cloudflaredBin) {
       logStep("3a", "Installing cloudflared tunnel tool...");
       try {
-        execSync("npm install -g cloudflared 2>&1", {
+        execSync("npm install -g cloudflared", {
           encoding: "utf-8",
           timeout: 60000,
           stdio: "pipe",
         });
-        const which = process.platform === "win32" ? "where" : "which";
-        cloudflaredBin = execSync(`${which} cloudflared 2>/dev/null`, {
-          encoding: "utf-8",
-          timeout: 5000,
-        }).trim().split("\n")[0];
+        // Re-check after install
+        try {
+          const which = isWin ? "where" : "which";
+          cloudflaredBin = execSync(`${which} cloudflared ${nullDev}`, {
+            encoding: "utf-8",
+            timeout: 5000,
+          }).trim().split("\n")[0];
+        } catch {
+          // Check npm prefix again after install
+          if (isWin) {
+            try {
+              const npmPrefix = execSync("npm prefix -g 2>nul", {
+                encoding: "utf-8",
+                timeout: 5000,
+              }).trim();
+              const cmd = path.join(npmPrefix, "cloudflared.cmd");
+              if (fs.existsSync(cmd)) cloudflaredBin = cmd;
+            } catch {}
+          }
+        }
       } catch (installErr) {
         log(`${DIM}Could not install cloudflared: ${installErr.message}${RESET}`);
+      }
+    }
+
+    // Method 4: Try using npx as a fallback (runs cloudflared without global install)
+    if (!cloudflaredBin) {
+      log(`${DIM}Trying npx cloudflared as fallback...${RESET}`);
+      try {
+        // Test if npx cloudflared works
+        execSync(`npx --yes cloudflared --version ${nullDev}`, {
+          encoding: "utf-8",
+          timeout: 30000,
+          stdio: "pipe",
+        });
+        cloudflaredBin = "npx";
+      } catch {
+        // npx fallback also failed
       }
     }
 
@@ -533,9 +604,19 @@ async function startTunnel(port) {
       logStep("3b", "Starting Cloudflare tunnel (free, no account needed)...");
 
       return new Promise((resolve) => {
-        const proc = spawn(cloudflaredBin, ["tunnel", "--url", `http://localhost:${port}`], {
-          stdio: ["ignore", "pipe", "pipe"],
-        });
+        // If using npx fallback, spawn differently
+        let proc;
+        if (cloudflaredBin === "npx") {
+          proc = spawn("npx", ["--yes", "cloudflared", "tunnel", "--url", `http://localhost:${port}`], {
+            stdio: ["ignore", "pipe", "pipe"],
+            shell: isWin,  // Windows needs shell: true for npx
+          });
+        } else {
+          proc = spawn(cloudflaredBin, ["tunnel", "--url", `http://localhost:${port}`], {
+            stdio: ["ignore", "pipe", "pipe"],
+            shell: isWin,  // Windows needs shell: true for .cmd files
+          });
+        }
 
         let resolved = false;
         const urlRegex = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
